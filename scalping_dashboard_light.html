@@ -144,6 +144,26 @@
 
   .next-upd span { color: var(--blue); }
 
+  .notif-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text2);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .notif-btn:hover { border-color: var(--border2); color: var(--text); }
+  .notif-btn.active { background: var(--green-bg); border-color: var(--green-bd); color: var(--green); }
+  .notif-btn.off { background: var(--bg2); border-color: var(--border); color: var(--text3); }
+
   /* ── CONTAINER ── */
   .container {
     max-width: 1400px;
@@ -547,6 +567,10 @@
       <div class="clock" id="clock">--:--:--</div>
       <div class="next-upd">обновление через <span id="countdown">30</span>с</div>
     </div>
+    <button class="notif-btn" id="notifBtn" onclick="toggleNotifications()">
+      <span id="notifIcon">🔔</span>
+      <span id="notifLabel">Уведомления</span>
+    </button>
   </div>
 </header>
 
@@ -777,6 +801,26 @@ async function scan(){
     const el=document.getElementById(`c-${r.symbol.replace('/','_')}`);
     if(el){el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');}
   });
+
+  // Уведомления — только при сильных сигналах 70%+
+  if(notificationsOn && scanCount > 1){
+    const strongSignals = results.filter(r => r.signal !== 'neutral' && r.strength >= 70);
+    strongSignals.forEach(r => {
+      const key = `${r.symbol}_${r.signal}`;
+      // Не спамить одним и тем же сигналом
+      if(!lastNotified[key]){
+        lastNotified[key] = true;
+        playSound(r.signal);
+        sendNotification(r);
+      }
+    });
+    // Сбрасываем старые ключи которых больше нет
+    Object.keys(lastNotified).forEach(k => {
+      const [sym, sig] = k.split('_');
+      const still = results.find(r => r.symbol === sym && r.signal === sig && r.strength >= 70);
+      if(!still) delete lastNotified[k];
+    });
+  }
 }
 
 function setTf(tf,btn){
@@ -784,6 +828,78 @@ function setTf(tf,btn){
   document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   scan();
+}
+
+// ══════════════════════════════════════════
+//   УВЕДОМЛЕНИЯ
+// ══════════════════════════════════════════
+let notificationsOn = false;
+let lastNotified = {};
+let audioCtx = null;
+
+function getAudioCtx(){
+  if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playSound(signal){
+  try {
+    const ctx = getAudioCtx();
+    const notes = signal === 'long'
+      ? [523, 659, 784]   // до-ми-соль — мажорный аккорд вверх
+      : [784, 622, 466];  // вниз — минорный
+
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const t = ctx.currentTime + i * 0.12;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.18, t + 0.02);
+      gain.gain.linearRampToValueAtTime(0, t + 0.18);
+      osc.start(t);
+      osc.stop(t + 0.2);
+    });
+  } catch(e) {}
+}
+
+function sendNotification(r){
+  if(Notification.permission !== 'granted') return;
+  const icon = r.signal === 'long' ? '🟢' : '🔴';
+  const dir  = r.signal === 'long' ? '▲ LONG' : '▼ SHORT';
+  new Notification(`${icon} ${r.symbol} — ${dir}`, {
+    body: `Сила: ${r.strength}%  |  SL: ${fmt(r.sl)}  TP: ${fmt(r.tp)}`,
+    icon: 'https://cryptologos.cc/logos/bitcoin-btc-logo.png',
+    badge: 'https://cryptologos.cc/logos/bitcoin-btc-logo.png',
+    tag: r.symbol,
+  });
+}
+
+async function toggleNotifications(){
+  if(!notificationsOn){
+    // Запрашиваем разрешение
+    const perm = await Notification.requestPermission();
+    if(perm === 'granted'){
+      notificationsOn = true;
+      // Разблокируем аудио первым кликом
+      try { getAudioCtx(); } catch(e){}
+      document.getElementById('notifBtn').classList.add('active');
+      document.getElementById('notifIcon').textContent = '🔔';
+      document.getElementById('notifLabel').textContent = 'Вкл 70%+';
+    } else {
+      alert('Разрешите уведомления в браузере!\nКликни на 🔒 в адресной строке → Уведомления → Разрешить');
+    }
+  } else {
+    notificationsOn = false;
+    lastNotified = {};
+    document.getElementById('notifBtn').classList.remove('active');
+    document.getElementById('notifBtn').classList.add('off');
+    document.getElementById('notifIcon').textContent = '🔕';
+    document.getElementById('notifLabel').textContent = 'Выкл';
+  }
 }
 
 setInterval(()=>{
